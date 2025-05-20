@@ -10,7 +10,6 @@
 #define LINE_BUFFER_SIZE 52
 #define REC_MAX_DEPTH 100
 //#define DEBUG 1
-
                        //  ^  <  v  >
 int8_t line_shift[4]   = {-1, 0, 1, 0};
 int8_t column_shift[4] = {0, -1, 0, 1}; 
@@ -39,6 +38,10 @@ void free_instruction(Robot_instructions* pt_instr);
 void print_map(Map* pt_map);
 void print_instructions(Robot_instructions* pt_instr);
 void convert_file_to_map_struct(char* filename, Map** pt_map, Robot_instructions** pt_instructions_list);
+void convert_element_to_bigger_element(char curr_char, char* converted_char_1, char* converted_char_2);
+Map* get_bigger_warehouse_map(Map* pt_map);
+uint8_t check_if_robot_can_move_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, uint8_t depth);
+void robot_move_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, char replace_char, uint8_t depth);
 uint8_t process_robot_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, char replace_char, uint8_t depth);
 uint8_t get_instruction_nb(char c);
 uint64_t get_sum_gps_coordinates(Map* map);
@@ -135,7 +138,7 @@ void print_map(Map* pt_map){
     for (int line_index = 0 ; line_index < pt_map->height ; line_index++){
         printf("\n");
         for (int column_index = 0 ; column_index < pt_map->width ; column_index++){
-            printf("%c ", pt_map->list[line_index][column_index]);
+            printf("%c", pt_map->list[line_index][column_index]);
         }
     }
 }
@@ -176,6 +179,223 @@ void convert_file_to_map_struct(char* filename, Map** pt_map, Robot_instructions
         }
     }
 }
+
+Map* get_bigger_warehouse_map(Map* pt_map){
+    // create bigger map from smaller map : pt_map
+    assert(pt_map != NULL);
+
+    // init new map
+    Map* wide_map = create_Map();
+    wide_map->list = malloc(sizeof(char*) * pt_map->height);
+    assert(wide_map->list != NULL);
+    wide_map->height = pt_map->height;
+    wide_map->width = pt_map->width * 2;
+
+    #ifdef DEBUG
+        printf("\n");
+    #endif
+
+    // copy data
+    for (int line_index = 0 ; line_index < wide_map->height ; line_index++){
+
+        // create new line
+        wide_map->list[line_index] = malloc(sizeof(char) * wide_map->width);
+        assert(wide_map->list[line_index] != NULL);
+
+        // copy line
+        for (int column_index = 0 ; column_index < pt_map->width ; column_index++){
+
+            // convert small element into wider element
+            convert_element_to_bigger_element(  pt_map->list[line_index][column_index], 
+                                                &(wide_map->list[line_index][column_index * 2]), 
+                                                &(wide_map->list[line_index][column_index * 2 + 1]));
+
+            #ifdef DEBUG
+                printf("%c%c", wide_map->list[line_index][column_index * 2], wide_map->list[line_index][column_index * 2 + 1]);
+            #endif
+            
+        }
+
+        #ifdef DEBUG
+            printf("\n");
+        #endif
+    }
+
+    return wide_map;
+}
+
+void convert_element_to_bigger_element(char curr_char, char* converted_char_1, char* converted_char_2){
+
+            if (curr_char == 'O'){
+
+                *converted_char_1 = '[';
+                *converted_char_2 = ']';
+
+            } else if ((curr_char == '.') || (curr_char == '#')){
+
+                *converted_char_1 = curr_char;
+                *converted_char_2 = curr_char;
+        
+            } else { // curr_char == '@'
+
+                *converted_char_1 = '@';
+                *converted_char_2 = '.';
+            }
+}
+
+uint8_t check_if_robot_can_move_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, uint8_t depth){
+
+    /********************************************************************************/
+
+    // depth limitation
+    assert(depth != 0);
+
+    // map limitation
+    assert(curr_position[0] < map->height);
+    assert(curr_position[0] >= 0);
+    assert(curr_position[1] < map->width);
+    assert(curr_position[1] >= 0);
+
+    /********************************************************************************/
+
+    // get current character
+    char curr_char = map->list[curr_position[0]][curr_position[1]];
+
+    #ifdef DEBUG
+        printf("\ncheck char : %c(%d,%d)", curr_char, curr_position[0], curr_position[1]);
+    #endif
+
+    // current location is a wall
+    if (curr_char == '#'){
+
+        // return : impossible
+        #ifdef DEBUG
+            printf("\nblocked");
+        #endif
+
+        return 0;
+    }
+
+    // current location is empty
+    if (curr_char == '.'){
+
+        // return : possible
+        #ifdef DEBUG
+            printf("\nempty");
+        #endif
+
+        return 1;
+    } 
+
+    // current position is the robot or is a box : need to verify
+    // compute next position
+    uint8_t next_position[2] = {curr_position[0] + line_shift[instruction_code], 
+                                curr_position[1] + column_shift[instruction_code]};                         
+
+    //  check next character
+    uint8_t answer = check_if_robot_can_move_rec(map, instruction_code, next_position, depth - 1);
+    if (!answer){
+        return 0; // impossible
+    }
+
+    // compute next char
+    char next_char = map->list[next_position[0]][next_position[1]];
+
+    // else check if next char is a box part
+    if ((instruction_code % 2 == 0) && ((next_char == '[') || (next_char == ']'))){ // vertical movement and next char is a box part
+
+        #ifdef DEBUG
+            printf("\nVertical AND next char is box part");
+        #endif        
+
+        // compute position of the other box part
+        if (next_char == '['){
+            next_position[1] += 1; // ']'
+        } else {
+            next_position[1] -= 1; // '['
+        }
+                                        
+        uint8_t answer_2 = check_if_robot_can_move_rec(map, instruction_code, next_position, depth - 1);
+        return answer_2;
+    }
+
+    return 1;
+}
+
+void robot_move_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, char replace_char, uint8_t depth){
+   
+    /********************************************************************************/
+
+    // depth limitation
+    assert(depth != 0);
+
+    // map limitation
+    assert(curr_position[0] < map->height);
+    assert(curr_position[0] >= 0);
+    assert(curr_position[1] < map->width);
+    assert(curr_position[1] >= 0);
+
+    /********************************************************************************/
+
+    // get current character
+    char curr_char = map->list[curr_position[0]][curr_position[1]];
+
+    #ifdef DEBUG
+        printf("\nchar %c(%d,%d) replace by %c", curr_char, curr_position[0], curr_position[1], replace_char);
+    #endif
+
+    // current location is a wall
+    assert(curr_char != '#');
+
+    // check if is empty
+    if (curr_char == '.'){
+        // replace character
+        map->list[curr_position[0]][curr_position[1]] = replace_char;
+        return;
+    }
+
+    // else : compute next position
+    uint8_t next_position[2] = {curr_position[0] + line_shift[instruction_code], 
+                                curr_position[1] + column_shift[instruction_code]};
+
+    // process next char
+    robot_move_rec(map, instruction_code, next_position, curr_char, depth - 1);
+
+    // compute next char
+    char next_char = map->list[next_position[0]][next_position[1]];
+
+    // else check if next char is a box part
+    if ((instruction_code % 2 == 0) && ((next_char == '[') || (next_char == ']'))){ // vertical movement and next char is a box part
+
+        char second_char;
+        uint8_t second_position[2] = {curr_position[0], curr_position[1]};
+
+        // compute position of the other box part
+        if (next_char == '['){
+            second_char = map->list[second_position[0]][++second_position[1]];
+            next_position[1] += 1; // ']'
+        } else {
+            second_char = map->list[second_position[0]][--second_position[1]];
+            next_position[1] -= 1; // '['
+        }
+
+        #ifdef DEBUG
+            printf("\nchar %c(%d,%d) replace by %c", second_char, second_position[0], second_position[1], '.');
+        #endif
+        
+        // replace character
+        map->list[second_position[0]][second_position[1]] = '.';
+                      
+        // process second box part
+        robot_move_rec(map, instruction_code, next_position, second_char, depth - 1);
+
+
+    }
+
+    // replace character
+    map->list[curr_position[0]][curr_position[1]] = replace_char;
+}
+
 
 uint8_t process_robot_rec(Map* map, uint8_t instruction_code, uint8_t* curr_position, char replace_char, uint8_t depth){
 
@@ -241,7 +461,7 @@ uint8_t get_instruction_nb(char c){
         return 1;
     } else if (c == 'v'){
         return 2;
-    } else {
+    } else { // c == '>'
         return 3;
     }
 }
@@ -256,7 +476,7 @@ uint64_t get_sum_gps_coordinates(Map* map){
     for (int line_index = 0 ; line_index < map->height ; line_index++){
         for (int column_index = 0 ; column_index < map->width ; column_index++){
             // check if there is a box on the location
-            if (map->list[line_index][column_index] == 'O'){
+            if (map->list[line_index][column_index] == '['){
                 //printf("\nAdd %d", (100 * column_index + line_index));
                 Sum += 100 * line_index + column_index;
             }
@@ -295,6 +515,17 @@ int main(){
     }
     assert(stop != 0);
 
+    // convert map to bigger warehouse
+    Map* bigger_warehouse = get_bigger_warehouse_map(warehouse_map);
+    robot_position[1] *= 2;
+
+    #ifdef DEBUG
+        printf("\nWarehouse created");
+    #endif
+
+    // print data
+    print_map(bigger_warehouse);
+
     // print data
     print_instructions(instructions_list);
 
@@ -308,28 +539,41 @@ int main(){
             printf("\ncurrent instruction : %c", instructions_list->list[instruction_index]);
         #endif
 
+        //getchar();
+
         // move the robot by one instruction
-        if (process_robot_rec(warehouse_map, instruction_nb, robot_position, '.', REC_MAX_DEPTH)){
+        if (check_if_robot_can_move_rec(bigger_warehouse, instruction_nb, robot_position, REC_MAX_DEPTH)){
+
+            printf("\nCAN MOVE");
+
+            // process movement
+            robot_move_rec(bigger_warehouse, instruction_nb, robot_position, '.', REC_MAX_DEPTH);
+
+            // change position
             robot_position[0] = robot_position[0] + line_shift[instruction_nb];
             robot_position[1] = robot_position[1] + column_shift[instruction_nb];
+        } else {
+
+            printf("\nCANNOT MOVE");
         }
 
         #ifdef DEBUG
             printf("\nrobot position : (%d,%d)", robot_position[0], robot_position[1]);
-            print_map(warehouse_map);
+            print_map(bigger_warehouse);
             //getchar();
         #endif
     }
 
     // print data
-    print_map(warehouse_map);
+    print_map(bigger_warehouse);
 
     // compute result
-    uint64_t Sum = get_sum_gps_coordinates(warehouse_map); 
+    uint64_t Sum = get_sum_gps_coordinates(bigger_warehouse); 
     printf("\nSum = %lu", Sum);
 
     // free
     free_map(warehouse_map);
+    free_map(bigger_warehouse);
     free_instruction(instructions_list);
 
     return 1;
